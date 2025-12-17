@@ -1,4 +1,5 @@
-from typing import Callable, Union, Iterable, Tuple
+from typing import Callable, Union, Iterable, Tuple, Any
+
 import logging
 import os
 import json
@@ -19,7 +20,7 @@ type SerializableType = Union[float, int, str, dict, bool, Iterable[int]]
 
 _json_dumps = json.dumps
 
-def _serialize_value(self, val: SerializableType, override: str | None = None) -> Tuple:
+def _serialize_value(self, val: SerializableType, override: str | None = None) -> Tuple[Any, str]:
     '''
     Utility function for serializing values. Raises TypeError if an object
     type is not supported
@@ -114,7 +115,7 @@ class State(Enum):
     FIND_END_BYTE      = 6
 
 
-def constrain(val: float, min_: float, max_: float) -> float:
+def constrain(val: int, min_: int, max_: int) -> int:
     if val < min_:
         return min_
     elif val > max_:
@@ -160,7 +161,9 @@ class SerialTransfer:
         self.bytes_to_rec: int = 0
         self.pay_index: int = 0
         self.rec_overhead_byte: int = 0
-        self.tx_buff = bytearray(MAX_PACKET_SIZE) #[' '] * MAX_PACKET_SIZE
+        # TODO review the indices
+        self._tx_packet_buff = bytearray(MAX_PACKET_SIZE + 5) # this contains the whole outbound packet
+        self.tx_buff = memoryview(self._tx_packet_buff)[4:-2] # this is a reference to just the payload bytes
         self.rx_buff = bytearray(MAX_PACKET_SIZE) #[' '] * MAX_PACKET_SIZE
 
         self.debug: bool = debug
@@ -171,7 +174,7 @@ class SerialTransfer:
         self.callbacks: dict[int, rcvCallback] = {}
         self.byte_format: str = byte_format
 
-        self.state = State.FIND_START_BYTE
+        self.state: State = State.FIND_START_BYTE
         
         if restrict_ports:
             self.port_name = None
@@ -317,10 +320,11 @@ class SerialTransfer:
         except TypeError:
             return None
 
+        # fmt_prefix is self.byte_format if byte_format is empty string
         fmt_prefix = byte_format or self.byte_format
         packed = struct.pack(fmt_prefix + fmt, val)
 
-        return self.tx_struct_obj(packed, start_pos)
+        return self.tx_bytes(packed, start_pos)
         
 ###        if val_type_override:
 ###            format_str = val_type_override
@@ -364,7 +368,7 @@ class SerialTransfer:
 ###
 ###        return self.tx_struct_obj(val_bytes, start_pos)
 
-    def tx_struct_obj(self, val_bytes: bytes | bytearray, start_pos: int = 0):
+    def tx_bytes(self, val_bytes: bytes | bytearray, start_pos: int = 0):
         '''
         Description:
         -----------
@@ -377,11 +381,10 @@ class SerialTransfer:
         :return: int - index of the last byte of the value in the TX buffer + 1,
                        None if operation failed
         '''
-      
-        for index in range(len(val_bytes)):
-            self.tx_buff[index + start_pos] = val_bytes[index]
-        
-        return start_pos + len(val_bytes)
+
+        end_indx = start_pos + len(val_bytes)
+        self.tx_buff[start_pos: end_indx] = val_bytes # much more efficient bytearray slice assignment
+        return end_indx
 
     def rx_obj(self, obj_type, start_pos=0, obj_byte_size=0, list_format=None, byte_format=''):
         '''
@@ -520,7 +523,7 @@ class SerialTransfer:
                     self.tx_buff[i] = ref_byte - i
                     ref_byte = i
 
-    def send(self, message_len, packet_id=0):
+    def send(self, message_len: int, packet_id: int = 0):
         '''
         Description:
         ------------
@@ -533,7 +536,7 @@ class SerialTransfer:
         :return: bool - whether or not the operation was successful
         '''
 
-        stack = []
+        #stack = []
         message_len = constrain(message_len, 0, MAX_PACKET_SIZE)
 
         try:
@@ -541,30 +544,34 @@ class SerialTransfer:
             self.stuff_packet(message_len)
             found_checksum = self.crc.calculate(self.tx_buff, message_len)
 
-            stack.append(START_BYTE)
-            stack.append(packet_id)
-            stack.append(self.overhead_byte)
-            stack.append(message_len)
+            # TODO review all the indices
 
-            for i in range(message_len):
-                if isinstance(self.tx_buff[i], str):
-                    val = ord(self.tx_buff[i])
-                else:
-                    val = int(self.tx_buff[i])
+            self._tx_packet_buff[0] = START_BYTE    # NOTE this can be done during __init__
+            self._tx_packet_buff[1] = packet_id
+            self._tx_packet_buff[2] = self.overhead_byte
+            self._tx_packet_buff[3] = message_len
 
-                stack.append(val)
+###         --- this is not necessary, payload bytes are already inside _tx_packet_buff
+###            for i in range(message_len):
+###                if isinstance(self.tx_buff[i], str):
+###                    val = ord(self.tx_buff[i])
+###                else:
+###                    val = int(self.tx_buff[i])
+###
+###                stack.append(val)
+###
+            self._tx_packet_buff[message_len + 4] = found_checksum
+            self._tx_packet_buff[message_len + 5] = STOP_BYTE
 
-            stack.append(found_checksum)
-            stack.append(STOP_BYTE)
-
-            stack = bytearray(stack)
+            # fast - zero copy 
+            packet_bytes = memoryview(self._tx_packet_buff)[0:message_len + 6]
             
             if self.open():
-                self.connection.write(stack)
+                self.connection.write(packet_bytes)
 
             return True
 
-        except:
+        except Exception:
             import traceback
             traceback.print_exc()
 
