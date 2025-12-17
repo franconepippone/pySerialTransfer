@@ -1,4 +1,4 @@
-from typing import Callable
+from typing import Callable, Union, Iterable, Tuple
 import logging
 import os
 import json
@@ -14,6 +14,43 @@ from .CRC import CRC
 
 class InvalidSerialPort(Exception):
     pass
+
+type SerializableType = Union[float, int, str, dict, bool, Iterable[int]]
+
+_json_dumps = json.dumps
+
+def _serialize_value(self, val: SerializableType, override: str | None = None) -> Tuple:
+    '''
+    Utility function for serializing values. Raises TypeError if an object
+    type is not supported
+    
+    :param self: Description
+    :param val: Description
+    :type val: SerializableType
+    :param override: Description
+    :type override: str | None
+    '''
+    if override:
+        return val, override
+
+    if isinstance(val, str):
+        b = val.encode()
+        return b, f"{len(b)}s"
+
+    if isinstance(val, bool):
+        return val, "?"
+
+    if isinstance(val, int):
+        return val, "i"
+
+    if isinstance(val, float):
+        return val, "f"
+    
+    if isinstance(val, dict):
+        b = _json_dumps(val).encode()
+        return b, f"{len(b)}s"
+
+    raise TypeError
 
 
 class Status(Enum):
@@ -223,14 +260,17 @@ class SerialTransfer:
         if self.connection.is_open:
             self.connection.close()
     
-    def tx_obj(self, val, start_pos=0, byte_format='', val_type_override=''):
+    def tx_objs(self, 
+        vals: Iterable[SerializableType],
+        start_pos: int = 0,
+        byte_format: str = '',
+        val_type_override: str = ''
+        ) -> int | None:
         '''
-        Description:
-        -----------
-        Insert an arbitrary variable's value into the TX buffer starting at the
-        specified index
+        Insert a list of serializable objects into the rx buffer
         
-        :param val:         n/a - value to be inserted into TX buffer
+        :param vals:     Iterable of serializable objects to insert into the tx buffer
+        :type vals: Iterable[SerializableType]
         :param start_pos:   int - index of TX buffer where the first byte
                                   of the value is to be stored in
         :param byte_format: str - byte order, size and alignment according to
@@ -241,49 +281,90 @@ class SerialTransfer:
         :return: int - index of the last byte of the value in the TX buffer + 1,
                        None if operation failed
         '''
-        
-        if val_type_override:
-            format_str = val_type_override
-            
-        else:
-            if isinstance(val, str):
-                val = val.encode()
-                format_str = '%ds' % len(val)
-                
-            elif isinstance(val, dict):
-                val = json.dumps(val).encode()
-                format_str = '%ds' % len(val)
-                
-            elif isinstance(val, float):
-                format_str = 'f'
-                
-            elif isinstance(val, bool):
-                format_str = '?'
-                
-            elif isinstance(val, int):
-                format_str = 'i'
-                
-            elif isinstance(val, list):
-                for el in val:
-                    start_pos = self.tx_obj(el, start_pos)
-                
-                return start_pos
-            
-            else:
+
+        for value in vals:
+            next_pos_candidate = self.tx_obj(value, start_pos, byte_format=byte_format, val_type_override=val_type_override)
+            if next_pos_candidate is None:
                 return None
-      
-        if byte_format:
-            val_bytes = struct.pack(byte_format + format_str, val)
-            
-        else:
-            if format_str == 'c':
-                val_bytes = struct.pack(self.byte_format + format_str, bytes(str(val), "utf-8"))
-            else:
-                val_bytes = struct.pack(self.byte_format + format_str, val)
+            start_pos = next_pos_candidate
 
-        return self.tx_struct_obj(val_bytes, start_pos)
+    def tx_obj(self, 
+            val: SerializableType, 
+            start_pos: int = 0, 
+            byte_format: str = '', 
+            val_type_override: str = ''
+        ) -> int | None:
+        '''
+        Description:
+        -----------
+        Insert an arbitrary variable's value into the TX buffer starting at the
+        specified index
+        
+        :param val:         SerializableType - value to be inserted into TX buffer
+        :param start_pos:   int - index of TX buffer where the first byte
+                                  of the value is to be stored in
+        :param byte_format: str - byte order, size and alignment according to
+                                  https://docs.python.org/3/library/struct.html#struct-format-strings
+        :param val_type_override: str - manually specify format according to
+                                        https://docs.python.org/3/library/struct.html#format-characters
+    
+        :return: int - index of the last byte of the value in the TX buffer + 1,
+                       None if operation failed
+        '''
 
-    def tx_struct_obj(self, val_bytes, start_pos=0):
+        try:
+            val, fmt = _serialize_value(val, val_type_override)
+        except TypeError:
+            return None
+
+        fmt_prefix = byte_format or self.byte_format
+        packed = struct.pack(fmt_prefix + fmt, val)
+
+        return self.tx_struct_obj(packed, start_pos)
+        
+###        if val_type_override:
+###            format_str = val_type_override
+###            
+###        else:
+###            match val:
+###                case str():
+###                    val = val.encode()
+###                    format_str = '%ds' % len(val)
+###                    
+###                case dict():
+###                    val = json.dumps(val).encode()
+###                    format_str = '%ds' % len(val)
+###                    
+###                case float():
+###                    format_str = 'f'
+###                    
+###                case bool():
+###                    format_str = '?'
+###                    
+###                case int():
+###                    format_str = 'i'
+###                    
+###                case list():
+###                    for el in val:
+###                        start_pos = self.tx_obj(el, start_pos)
+###                    
+###                    return start_pos
+###
+###                case _:
+###                    return None
+###      
+###        if byte_format:
+###            val_bytes = struct.pack(byte_format + format_str, val)
+###            
+###        else:
+###            if format_str == 'c':
+###                val_bytes = struct.pack(self.byte_format + format_str, bytes(str(val), "utf-8"))
+###            else:
+###                val_bytes = struct.pack(self.byte_format + format_str, val)
+###
+###        return self.tx_struct_obj(val_bytes, start_pos)
+
+    def tx_struct_obj(self, val_bytes: bytes | bytearray, start_pos: int = 0):
         '''
         Description:
         -----------
