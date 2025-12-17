@@ -24,6 +24,7 @@ class Status(Enum):
     PAYLOAD_ERROR   = -1
     STOP_BYTE_ERROR = -2
 
+ERROR_STATUS = set((Status.CRC_ERROR, Status.PAYLOAD_ERROR, Status.STOP_BYTE_ERROR))
 
 START_BYTE = 0x7E
 STOP_BYTE  = 0x81
@@ -604,7 +605,7 @@ class SerialTransfer:
         self.status = Status.CONTINUE
         return self.bytes_read
     
-    def tick(self):
+    def tick(self) -> bool:
         '''
         Description:
         ------------
@@ -613,10 +614,10 @@ class SerialTransfer:
         to the parsed packet's ID (if such a callback exists for that packet
         ID)
 
-        :return: void
+        :return: bool
         '''
         
-        if self.available():
+        if self.available() > 0:
             if self.id_byte in self.callbacks:
                 self.callbacks[self.id_byte]()
             elif self.debug:
@@ -624,16 +625,7 @@ class SerialTransfer:
             
             return True
         
-        elif self.debug and self.status in [Status.CRC_ERROR, Status.PAYLOAD_ERROR, Status.STOP_BYTE_ERROR]:
-            if self.status == Status.CRC_ERROR:
-                err_str = 'CRC_ERROR'
-            elif self.status == Status.PAYLOAD_ERROR:
-                err_str = 'PAYLOAD_ERROR'
-            elif self.status == Status.STOP_BYTE_ERROR:
-                err_str = 'STOP_BYTE_ERROR'
-            else:
-                err_str = str(self.status)
-                
-            logging.error('{}'.format(err_str))
+        elif self.debug and self.status in ERROR_STATUS:
+            logging.error(self.status.name)
         
         return False
