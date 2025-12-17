@@ -1,3 +1,4 @@
+from typing import Callable
 import logging
 import os
 import json
@@ -12,10 +13,6 @@ from .CRC import CRC
 
 
 class InvalidSerialPort(Exception):
-    pass
-
-
-class InvalidCallbackList(Exception):
     pass
 
 
@@ -79,7 +76,7 @@ class State(Enum):
     FIND_END_BYTE      = 6
 
 
-def constrain(val, min_, max_):
+def constrain(val: float, min_: float, max_: float) -> float:
     if val < min_:
         return min_
     elif val > max_:
@@ -90,9 +87,19 @@ def constrain(val, min_, max_):
 def serial_ports():
     return [p.device for p in serial.tools.list_ports.comports(include_links=True)]
 
+# callback used when calling 'tick()'
+type rcvCallback = Callable[[], None]
 
 class SerialTransfer:
-    def __init__(self, port, baud=115200, restrict_ports=True, debug=True, byte_format=BYTE_FORMATS['little-endian'], timeout=0.05, write_timeout=None):
+    def __init__(self, 
+            port: str, 
+            baud: int=115200, 
+            restrict_ports: bool = True, 
+            debug: bool = True, 
+            byte_format: str =BYTE_FORMATS['little-endian'], 
+            timeout: float =0.05, 
+            write_timeout: float | None = None
+        ):
         '''
         Description:
         ------------
@@ -112,19 +119,19 @@ class SerialTransfer:
         :return: void
         '''
 
-        self.bytes_to_rec = 0
-        self.pay_index = 0
-        self.rec_overhead_byte = 0
-        self.tx_buff = [' '] * MAX_PACKET_SIZE
-        self.rx_buff = [' '] * MAX_PACKET_SIZE
+        self.bytes_to_rec: int = 0
+        self.pay_index: int = 0
+        self.rec_overhead_byte: int = 0
+        self.tx_buff = bytearray(MAX_PACKET_SIZE) #[' '] * MAX_PACKET_SIZE
+        self.rx_buff = bytearray(MAX_PACKET_SIZE) #[' '] * MAX_PACKET_SIZE
 
-        self.debug        = debug
-        self.id_byte       = 0
-        self.bytes_read    = 0
-        self.status       = 0
+        self.debug: bool = debug
+        self.id_byte: int = 0
+        self.bytes_read: int = 0
+        self.status: Status = Status.CRC_ERROR
         self.overhead_byte = 0xFF
-        self.callbacks    = []
-        self.byte_format  = byte_format
+        self.callbacks: dict[int, rcvCallback] = {}
+        self.byte_format: str = byte_format
 
         self.state = State.FIND_START_BYTE
         
@@ -149,7 +156,7 @@ class SerialTransfer:
         self.connection.timeout = timeout
         self.connection.write_timeout = write_timeout
 
-    def open(self):
+    def open(self) -> bool:
         '''
         Description:
         ------------
@@ -167,24 +174,42 @@ class SerialTransfer:
                 return False
         return True
     
-    def set_callbacks(self, callbacks: Union[list[callable], tuple[callable]]):
+    def bind_callback(self, pack_id: int, cb: rcvCallback) -> None:
         '''
         Description:
         ------------
-        Specify a sequence of callback functions to be automatically called by
-        self.tick() when a new packet is fully parsed. The ID of the parsed
-        packet is then used to determine which callback needs to be called.
-
-        :return: void
+        Bind a callback function for a given packed id. This is called
+        automatically when a new packet is fully parsed when using self.tick()
+        
+        :param self: Description
+        :param pack_id: Description
+        :type pack_id: int
+        :param cb: Description
+        :type cb: rcvCallback
         '''
-        
-        if not isinstance(callbacks, (list, tuple)):
-            raise InvalidCallbackList('Parameter "callbacks" is not of type "list" or "tuple"')
-        
-        if not all([callable(cb) for cb in callbacks]):
-            raise InvalidCallbackList('One or more elements in "callbacks" are not callable')
-        
-        self.callbacks = callbacks
+
+        assert 0 <= pack_id <= 255, "Id must be a byte, in range [0, 255]"
+
+        self.callbacks[pack_id] = cb
+
+###    def set_callbacks(self, callbacks: Union[list[callable], tuple[callable]]):
+###        '''
+###        Description:
+###        ------------
+###        Specify a sequence of callback functions to be automatically called by
+###        self.tick() when a new packet is fully parsed. The ID of the parsed
+###        packet is then used to determine which callback needs to be called.
+###
+###        :return: void
+###        '''
+###        
+###        if not isinstance(callbacks, (list, tuple)):
+###            raise InvalidCallbackList('Parameter "callbacks" is not of type "list" or "tuple"')
+###        
+###        if not all([callable(cb) for cb in callbacks]):
+###            raise InvalidCallbackList('One or more elements in "callbacks" are not callable')
+###        
+###        self.callbacks = callbacks
 
     def close(self):
         '''
@@ -592,7 +617,7 @@ class SerialTransfer:
         '''
         
         if self.available():
-            if self.id_byte < len(self.callbacks):
+            if self.id_byte in self.callbacks:
                 self.callbacks[self.id_byte]()
             elif self.debug:
                 logging.error('No callback available for packet ID {}'.format(self.id_byte))
