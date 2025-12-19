@@ -62,7 +62,7 @@ class Status(Enum):
     PAYLOAD_ERROR   = -1
     STOP_BYTE_ERROR = -2
 
-ERROR_STATUS = set((Status.CRC_ERROR, Status.PAYLOAD_ERROR, Status.STOP_BYTE_ERROR))
+ERROR_STATUS_SET = set((Status.CRC_ERROR, Status.PAYLOAD_ERROR, Status.STOP_BYTE_ERROR))
 
 START_BYTE = 0x7E
 STOP_BYTE  = 0x81
@@ -163,6 +163,7 @@ class SerialTransfer:
         self.rec_overhead_byte: int = 0
         # TODO review the indices
         self._tx_packet_buff = bytearray(MAX_PACKET_SIZE + 5) # this contains the whole outbound packet
+        self._txpackbuff_mv = memoryview(self._tx_packet_buff) # we create this once, and use it for each call of send()
         self.tx_buff = memoryview(self._tx_packet_buff)[4:-2] # this is a reference to just the payload bytes
         self.rx_buff = bytearray(MAX_PACKET_SIZE) #[' '] * MAX_PACKET_SIZE
 
@@ -503,7 +504,7 @@ class SerialTransfer:
                     return i
         return -1
 
-    def stuff_packet(self, pay_len):
+    def stuff_packet(self, pay_len: int):
         '''
         Description:
         ------------
@@ -563,8 +564,8 @@ class SerialTransfer:
             self._tx_packet_buff[message_len + 4] = found_checksum
             self._tx_packet_buff[message_len + 5] = STOP_BYTE
 
-            # fast - zero copy 
-            packet_bytes = memoryview(self._tx_packet_buff)[0:message_len + 6]
+            # fast - zero copy. We use the memoryview object we created during __init__
+            packet_bytes = self._txpackbuff_mv[0:message_len + 6]
             
             if self.open():
                 self.connection.write(packet_bytes)
@@ -596,7 +597,7 @@ class SerialTransfer:
 
             self.rx_buff[test_index] = START_BYTE
 
-    def available(self):
+    def available(self) -> int:
         '''
         Description:
         ------------
@@ -713,7 +714,7 @@ class SerialTransfer:
             
             return True
         
-        elif self.debug and self.status in ERROR_STATUS:
+        elif self.debug and self.status in ERROR_STATUS_SET:
             logging.error(self.status.name)
         
         return False
