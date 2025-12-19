@@ -1,4 +1,4 @@
-from typing import Callable, Union, Iterable, Tuple, Any
+from typing import Callable, Union, Iterable, Tuple, Any, cast
 
 import logging
 import os
@@ -12,12 +12,10 @@ import serial.tools.list_ports
 from array import array
 from .CRC import CRC
 
-
 class InvalidSerialPort(Exception):
     pass
 
 type SerializableObj = Union[float, int, str, dict[str, SerializableObj], bool]
-
 
 def _serialize_value(val: SerializableObj, override: str | None = None) -> Tuple[Any, str]:
     '''
@@ -127,7 +125,7 @@ def serial_ports():
     return [p.device for p in serial.tools.list_ports.comports(include_links=True)]
 
 # callback passet to bind_callback(), called when using 'tick()'
-type rcvCallback = Callable[[], None]
+type rcvCallback = Callable[[SerialTransfer], None]
 
 class SerialTransfer:
     def __init__(self, 
@@ -655,7 +653,7 @@ class SerialTransfer:
         
         if self.available() > 0:
             if self.id_byte in self.callbacks:
-                self.callbacks[self.id_byte]()
+                self.callbacks[self.id_byte](self)
             elif self.debug:
                 logging.error('No callback available for packet ID {}'.format(self.id_byte))
             
