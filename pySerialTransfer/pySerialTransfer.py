@@ -16,9 +16,8 @@ from .CRC import CRC
 class InvalidSerialPort(Exception):
     pass
 
-type SerializableObj = Union[float, int, str, dict, bool]
+type SerializableObj = Union[float, int, str, dict[str, SerializableObj], bool]
 
-_json_dumps = json.dumps
 
 def _serialize_value(val: SerializableObj, override: str | None = None) -> Tuple[Any, str]:
     '''
@@ -48,25 +47,10 @@ def _serialize_value(val: SerializableObj, override: str | None = None) -> Tuple
         return val, "f"
     
     if isinstance(val, dict):
-        b = _json_dumps(val).encode()
+        b = json.dumps(val).encode()
         return b, f"{len(b)}s"
 
     raise TypeError
-
-
-class Types(Enum):
-    UINT8   = 0
-    UINT16  = 1
-    UINT32  = 2
-    UINT64  = 3
-    INT8    = 4
-    INT16   = 5
-    INT32   = 6
-    INT64   = 7
-    FLOAT   = 8 
-    DOUBLE  = 9 
-    BOOL    = 10
-    CHAR    =  11
 
 
 class Status(Enum):
@@ -182,9 +166,10 @@ class SerialTransfer:
         self._txpackbuff_mv = memoryview(self._tx_packet_buff) # we create this once, and use it for each call of send()
         self.tx_buff = memoryview(self._tx_packet_buff)[4:-2] # this is a reference to just the payload bytes
 
+        # this for now is unused, but rx_buff acts the same way
         self._rx_packet_buff = bytearray(MAX_PACKET_SIZE)
         self._rxpackbuff_mv = memoryview(self._rx_packet_buff)
-        self.rx_buff = bytearray(MAX_PAYLOAD_SIZE)[4:-2] #[' '] * MAX_PACKET_SIZE
+        self.rx_buff = memoryview(self._rx_packet_buff)[4:-2] #[' '] * MAX_PACKET_SIZE
 
         self.debug: bool = debug
         self.id_byte: int = 0
@@ -252,25 +237,6 @@ class SerialTransfer:
         assert 0 <= pack_id <= 255, "Id must be a byte, in range [0, 255]"
 
         self.callbacks[pack_id] = cb
-
-###    def set_callbacks(self, callbacks: Union[list[callable], tuple[callable]]):
-###        '''
-###        Description:
-###        ------------
-###        Specify a sequence of callback functions to be automatically called by
-###        self.tick() when a new packet is fully parsed. The ID of the parsed
-###        packet is then used to determine which callback needs to be called.
-###
-###        :return: void
-###        '''
-###        
-###        if not isinstance(callbacks, (list, tuple)):
-###            raise InvalidCallbackList('Parameter "callbacks" is not of type "list" or "tuple"')
-###        
-###        if not all([callable(cb) for cb in callbacks]):
-###            raise InvalidCallbackList('One or more elements in "callbacks" are not callable')
-###        
-###        self.callbacks = callbacks
 
     def close(self):
         '''
@@ -346,49 +312,7 @@ class SerialTransfer:
 
         return self.tx_bytes(packed, start_pos)
         
-###        if val_type_override:
-###            format_str = val_type_override
-###            
-###        else:
-###            match val:
-###                case str():
-###                    val = val.encode()
-###                    format_str = '%ds' % len(val)
-###                    
-###                case dict():
-###                    val = json.dumps(val).encode()
-###                    format_str = '%ds' % len(val)
-###                    
-###                case float():
-###                    format_str = 'f'
-###                    
-###                case bool():
-###                    format_str = '?'
-###                    
-###                case int():
-###                    format_str = 'i'
-###                    
-###                case list():
-###                    for el in val:
-###                        start_pos = self.tx_obj(el, start_pos)
-###                    
-###                    return start_pos
-###
-###                case _:
-###                    return None
-###      
-###        if byte_format:
-###            val_bytes = struct.pack(byte_format + format_str, val)
-###            
-###        else:
-###            if format_str == 'c':
-###                val_bytes = struct.pack(self.byte_format + format_str, bytes(str(val), "utf-8"))
-###            else:
-###                val_bytes = struct.pack(self.byte_format + format_str, val)
-###
-###        return self.tx_struct_obj(val_bytes, start_pos)
-
-    def tx_bytes(self, val_bytes: bytes | bytearray, start_pos: int = 0):
+    def tx_bytes(self, val_bytes: bytes | bytearray, start_pos: int = 0) -> int:
         '''
         Description:
         -----------
@@ -405,11 +329,14 @@ class SerialTransfer:
         end_indx = start_pos + len(val_bytes)
         self.tx_buff[start_pos: end_indx] = val_bytes # much more efficient bytearray slice assignment
         return end_indx
-    
-    def rx_objs(self, obj_types: Iterable[Types], start_pos: int = 0):
-        pass
 
-    def rx_obj(self, obj_type, start_pos=0, obj_byte_size=0, list_format=None, byte_format=''):
+    def rx_obj(self, 
+            obj_type: type | str, 
+            start_pos: int = 0,
+            obj_byte_size: int = 0,
+            list_format: str | None = None, 
+            byte_format: str = ''
+        ) -> Any:
         '''
         Description:
         ------------
@@ -485,6 +412,15 @@ class SerialTransfer:
             unpacked_response = json.loads(unpacked_response)
         
         return unpacked_response
+
+    def rx_payload_bytes(self) -> memoryview[int]:
+        '''
+        :return: Returns a memoryview of the payload bytes of the latest received packet.
+            You can treat this as a standard bytes object for most scenarios.
+        :rtype: memoryview[int]
+        '''
+        return self.rx_buff[:self.bytes_to_rec]
+
 
     def calc_overhead(self, pay_len):
         '''
@@ -574,15 +510,8 @@ class SerialTransfer:
             self._tx_packet_buff[2] = self.overhead_byte
             self._tx_packet_buff[3] = message_len
 
-###         --- this is not necessary, payload bytes are already inside _tx_packet_buff
-###            for i in range(message_len):
-###                if isinstance(self.tx_buff[i], str):
-###                    val = ord(self.tx_buff[i])
-###                else:
-###                    val = int(self.tx_buff[i])
-###
-###                stack.append(val)
-###
+###         no copy necessary, payload bytes are already inside _tx_packet_buff
+
             self._tx_packet_buff[message_len + 4] = found_checksum
             self._tx_packet_buff[message_len + 5] = STOP_BYTE
 
@@ -633,7 +562,6 @@ class SerialTransfer:
         self.status = status_code
         return 0
     
-
     def available(self):
         '''
         Description:
