@@ -16,18 +16,18 @@ from .CRC import CRC
 class InvalidSerialPort(Exception):
     pass
 
-type SerializableType = Union[float, int, str, dict, bool, Iterable[int]]
+type SerializableObj = Union[float, int, str, dict, bool]
 
 _json_dumps = json.dumps
 
-def _serialize_value(self, val: SerializableType, override: str | None = None) -> Tuple[Any, str]:
+def _serialize_value(val: SerializableObj, override: str | None = None) -> Tuple[Any, str]:
     '''
     Utility function for serializing values. Raises TypeError if an object
     type is not supported
     
     :param self: Description
     :param val: Description
-    :type val: SerializableType
+    :type val: SerializableObj
     :param override: Description
     :type override: str | None
     '''
@@ -54,6 +54,21 @@ def _serialize_value(self, val: SerializableType, override: str | None = None) -
     raise TypeError
 
 
+class Types(Enum):
+    UINT8   = 0
+    UINT16  = 1
+    UINT32  = 2
+    UINT64  = 3
+    INT8    = 4
+    INT16   = 5
+    INT32   = 6
+    INT64   = 7
+    FLOAT   = 8 
+    DOUBLE  = 9 
+    BOOL    = 10
+    CHAR    =  11
+
+
 class Status(Enum):
     CONTINUE        = 3
     NEW_DATA        = 2
@@ -67,7 +82,8 @@ ERROR_STATUS_SET = set((Status.CRC_ERROR, Status.PAYLOAD_ERROR, Status.STOP_BYTE
 START_BYTE = 0x7E
 STOP_BYTE  = 0x81
 
-MAX_PACKET_SIZE = 0xFE
+MAX_PAYLOAD_SIZE = 0xFE
+MAX_PACKET_SIZE = 4 + MAX_PAYLOAD_SIZE + 2 # size of a full packet
 
 BYTE_FORMATS = {'native':          '@',
                 'native_standard': '=',
@@ -126,7 +142,7 @@ def constrain(val: int, min_: int, max_: int) -> int:
 def serial_ports():
     return [p.device for p in serial.tools.list_ports.comports(include_links=True)]
 
-# callback used when calling 'tick()'
+# callback passet to bind_callback(), called when using 'tick()'
 type rcvCallback = Callable[[], None]
 
 class SerialTransfer:
@@ -162,10 +178,13 @@ class SerialTransfer:
         self.pay_index: int = 0
         self.rec_overhead_byte: int = 0
         # TODO review the indices
-        self._tx_packet_buff = bytearray(MAX_PACKET_SIZE + 5) # this contains the whole outbound packet
+        self._tx_packet_buff = bytearray(MAX_PACKET_SIZE) # this contains the whole outbound packet
         self._txpackbuff_mv = memoryview(self._tx_packet_buff) # we create this once, and use it for each call of send()
         self.tx_buff = memoryview(self._tx_packet_buff)[4:-2] # this is a reference to just the payload bytes
-        self.rx_buff = bytearray(MAX_PACKET_SIZE) #[' '] * MAX_PACKET_SIZE
+
+        self._rx_packet_buff = bytearray(MAX_PACKET_SIZE)
+        self._rxpackbuff_mv = memoryview(self._rx_packet_buff)
+        self.rx_buff = bytearray(MAX_PAYLOAD_SIZE)[4:-2] #[' '] * MAX_PACKET_SIZE
 
         self.debug: bool = debug
         self.id_byte: int = 0
@@ -265,7 +284,7 @@ class SerialTransfer:
             self.connection.close()
     
     def tx_objs(self, 
-        vals: Iterable[SerializableType],
+        vals: Iterable[SerializableObj],
         start_pos: int = 0,
         byte_format: str = '',
         val_type_override: str = ''
@@ -274,7 +293,7 @@ class SerialTransfer:
         Insert a list of serializable objects into the rx buffer
         
         :param vals:     Iterable of serializable objects to insert into the tx buffer
-        :type vals: Iterable[SerializableType]
+        :type vals: Iterable[SerializableObj]
         :param start_pos:   int - index of TX buffer where the first byte
                                   of the value is to be stored in
         :param byte_format: str - byte order, size and alignment according to
@@ -293,7 +312,7 @@ class SerialTransfer:
             start_pos = next_pos_candidate
 
     def tx_obj(self, 
-            val: SerializableType, 
+            val: SerializableObj, 
             start_pos: int = 0, 
             byte_format: str = '', 
             val_type_override: str = ''
@@ -304,7 +323,7 @@ class SerialTransfer:
         Insert an arbitrary variable's value into the TX buffer starting at the
         specified index
         
-        :param val:         SerializableType - value to be inserted into TX buffer
+        :param val:         SerializableObj - value to be inserted into TX buffer
         :param start_pos:   int - index of TX buffer where the first byte
                                   of the value is to be stored in
         :param byte_format: str - byte order, size and alignment according to
@@ -386,6 +405,9 @@ class SerialTransfer:
         end_indx = start_pos + len(val_bytes)
         self.tx_buff[start_pos: end_indx] = val_bytes # much more efficient bytearray slice assignment
         return end_indx
+    
+    def rx_objs(self, obj_types: Iterable[Types], start_pos: int = 0):
+        pass
 
     def rx_obj(self, obj_type, start_pos=0, obj_byte_size=0, list_format=None, byte_format=''):
         '''
@@ -498,7 +520,7 @@ class SerialTransfer:
                        within the given packet array
         '''
 
-        if pay_len <= MAX_PACKET_SIZE:
+        if pay_len <= MAX_PAYLOAD_SIZE:
             for i in range(pay_len - 1, -1, -1):
                 if self.tx_buff[i] == START_BYTE:
                     return i
@@ -518,7 +540,7 @@ class SerialTransfer:
 
         ref_byte = self.find_last(pay_len)
 
-        if (not ref_byte == -1) and (ref_byte <= MAX_PACKET_SIZE):
+        if (not ref_byte == -1) and (ref_byte <= MAX_PAYLOAD_SIZE):
             for i in range(pay_len - 1, -1, -1):
                 if self.tx_buff[i] == START_BYTE:
                     self.tx_buff[i] = ref_byte - i
@@ -538,7 +560,7 @@ class SerialTransfer:
         '''
 
         #stack = []
-        message_len = constrain(message_len, 0, MAX_PACKET_SIZE)
+        message_len = constrain(message_len, 0, MAX_PAYLOAD_SIZE)
 
         try:
             self.calc_overhead(message_len)
@@ -589,7 +611,7 @@ class SerialTransfer:
 
         test_index = self.rec_overhead_byte
 
-        if test_index <= MAX_PACKET_SIZE:
+        if test_index <= MAX_PAYLOAD_SIZE:
             while self.rx_buff[test_index]:
                 delta = self.rx_buff[test_index]
                 self.rx_buff[test_index] = START_BYTE
@@ -597,7 +619,22 @@ class SerialTransfer:
 
             self.rx_buff[test_index] = START_BYTE
 
-    def available(self) -> int:
+    def _avb_fail(self, status_code: Status) -> int:
+        '''
+        This is ment to be a shorthand for the sequence of actions usally done when the available method
+        fails to find a full packet. Only internal use.
+        
+        :param status_code: the code to which the status attribute will be set to
+        :type status_code: Status
+        :return: always zero because operation failed
+        :rtype: int
+        '''
+        self.bytes_read = 0
+        self.status = status_code
+        return 0
+    
+
+    def available(self):
         '''
         Description:
         ------------
@@ -611,8 +648,7 @@ class SerialTransfer:
         if self.open():
             if self.connection.in_waiting:
                 while self.connection.in_waiting:
-                    rec_char = int.from_bytes(self.connection.read(),
-                                             byteorder='big')
+                    rec_char = self.connection.read(1)[0]
 
                     if self.state == State.FIND_START_BYTE:
                         if rec_char == START_BYTE:
@@ -645,7 +681,7 @@ class SerialTransfer:
                             # Try to receive as many more bytes as we can, but we might not get all of them
                             # if there is a timeout from the OS
                             if self.pay_index != self.bytes_to_rec:
-                                more_bytes = list(self.connection.read(self.bytes_to_rec - self.pay_index))
+                                more_bytes = self.connection.read(self.bytes_to_rec - self.pay_index)
                                 next_index = self.pay_index + len(more_bytes)
 
                                 self.rx_buff[self.pay_index:next_index] = more_bytes
