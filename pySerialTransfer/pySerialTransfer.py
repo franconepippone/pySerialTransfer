@@ -495,7 +495,6 @@ class SerialTransfer:
         :return: bool - whether or not the operation was successful
         '''
 
-        #stack = []
         message_len = constrain(message_len, 0, MAX_PAYLOAD_SIZE)
 
         try:
@@ -503,14 +502,12 @@ class SerialTransfer:
             self.stuff_packet(message_len)
             found_checksum = self.crc.calculate(self.tx_buff, message_len)
 
-            # TODO review all the indices
-
             self._tx_packet_buff[0] = START_BYTE    # NOTE this can be done during __init__
             self._tx_packet_buff[1] = packet_id
             self._tx_packet_buff[2] = self.overhead_byte
             self._tx_packet_buff[3] = message_len
 
-###         no copy necessary, payload bytes are already inside _tx_packet_buff
+            # no copy necessary, payload bytes are already inside _tx_packet_buff
 
             self._tx_packet_buff[message_len + 4] = found_checksum
             self._tx_packet_buff[message_len + 5] = STOP_BYTE
@@ -547,20 +544,6 @@ class SerialTransfer:
                 test_index += delta
 
             self.rx_buff[test_index] = START_BYTE
-
-    def _avb_fail(self, status_code: Status) -> int:
-        '''
-        This is ment to be a shorthand for the sequence of actions usally done when the available method
-        fails to find a full packet. Only internal use.
-        
-        :param status_code: the code to which the status attribute will be set to
-        :type status_code: Status
-        :return: always zero because operation failed
-        :rtype: int
-        '''
-        self.bytes_read = 0
-        self.status = status_code
-        return 0
     
     def available(self):
         '''
