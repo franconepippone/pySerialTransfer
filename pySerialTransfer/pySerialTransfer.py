@@ -411,7 +411,7 @@ class SerialTransfer:
         
         return unpacked_response
 
-    def rx_payload_bytes_mv(self) -> memoryview[int]:
+    def rx_payload_bytes_mv(self) -> memoryview:
         '''
         :return: Returns a memoryview of the payload bytes of the latest received packet.
             You can treat this as a standard bytes object for most scenarios.
@@ -429,6 +429,14 @@ class SerialTransfer:
         '''
         return bytes(self.rx_buff[:self.bytes_to_rec])
 
+    def get_current_packed_id(self) -> int:
+        '''
+        Returns the id of the latest received packet
+
+        :return:
+        :rtype: int
+        '''
+        return self.id_byte
 
     def calc_overhead(self, pay_len):
         '''
