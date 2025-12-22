@@ -411,7 +411,7 @@ class SerialTransfer:
         
         return unpacked_response
 
-    def rx_payload_bytes_mv(self) -> memoryview:
+    def rx_bytes_mv(self) -> memoryview:
         '''
         :return: Returns a memoryview of the payload bytes of the latest received packet.
             You can treat this as a standard bytes object for most scenarios.
@@ -419,7 +419,7 @@ class SerialTransfer:
         '''
         return self.rx_buff[:self.bytes_to_rec]
     
-    def rx_payload_bytes(self) -> bytes:
+    def rx_bytes(self) -> bytes:
         '''
         Returns a bytes object of the payload bytes of the latest received packet.
         
@@ -511,6 +511,8 @@ class SerialTransfer:
         :return: bool - whether or not the operation was successful
         '''
 
+        assert 0 <= packet_id <= 255, "packed id must be in range of a byte"
+
         message_len = constrain(message_len, 0, MAX_PAYLOAD_SIZE)
 
         try:
@@ -560,7 +562,7 @@ class SerialTransfer:
                 test_index += delta
 
             self.rx_buff[test_index] = START_BYTE
-    
+
     def available(self):
         '''
         Description:
@@ -575,7 +577,7 @@ class SerialTransfer:
         if self.open():
             if self.connection.in_waiting:
                 while self.connection.in_waiting:
-                    rec_char = self.connection.read(1)[0]
+                    rec_char: int = self.connection.read(1)[0]
 
                     if self.state == State.FIND_START_BYTE:
                         if rec_char == START_BYTE:
@@ -680,4 +682,14 @@ class SerialTransfer:
         elif self.debug and self.status in ERROR_STATUS_SET:
             logging.error(self.status.name)
         
+        return False
+
+    def __enter__(self):
+        # setup code goes here
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        # teardown code goes here
+        # return True to suppress exceptions, False to propagate
+        self.close()
         return False
