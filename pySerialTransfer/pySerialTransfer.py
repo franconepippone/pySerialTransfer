@@ -310,7 +310,7 @@ class SerialTransfer:
 
         return self.tx_bytes(packed, start_pos)
         
-    def tx_bytes(self, val_bytes: bytes | bytearray, start_pos: int = 0) -> int:
+    def tx_bytes(self, val_bytes: bytes | bytearray | memoryview, start_pos: int = 0) -> int:
         '''
         Description:
         -----------
